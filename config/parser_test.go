@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"os/user"
 	"testing"
 
 	"github.com/sshup/sshup/config"
@@ -77,6 +78,9 @@ func TestParse_hostFields(t *testing.T) {
 	if got.Port != 2222 {
 		t.Errorf("Port = %d, want %d", got.Port, 2222)
 	}
+	if got.IdentityFile != "~/.ssh/id_ed25519" {
+		t.Errorf("IdentityFile = %q, want %q", got.IdentityFile, "~/.ssh/id_ed25519")
+	}
 }
 
 func TestParse_defaultsWhenOmitted(t *testing.T) {
@@ -93,6 +97,41 @@ func TestParse_defaultsWhenOmitted(t *testing.T) {
 	}
 	if got.Port != 22 {
 		t.Errorf("Port = %d, want %d", got.Port, 22)
+	}
+}
+
+func TestParse_defaultsHostNameToAliasWhenOmitted(t *testing.T) {
+	path := writeTempConfig(t, `
+Host app-1
+  User deploy
+`)
+
+	hosts, err := config.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	got := hosts[0]
+	if got.HostName != "app-1" {
+		t.Errorf("HostName = %q, want %q", got.HostName, "app-1")
+	}
+}
+
+func TestParse_defaultsUserToCurrentOSUserWhenOmitted(t *testing.T) {
+	path := writeTempConfig(t, `
+Host app-1
+  HostName 192.168.1.2
+`)
+
+	hosts, err := config.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	got := hosts[0]
+	want := currentUsername()
+	if got.User != want {
+		t.Errorf("User = %q, want %q", got.User, want)
 	}
 }
 
@@ -116,4 +155,13 @@ func TestParse_missingFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-nil error")
 	}
+}
+
+func currentUsername() string {
+	currentUser, err := user.Current()
+	if err != nil || currentUser.Username == "" {
+		return "root"
+	}
+
+	return currentUser.Username
 }
