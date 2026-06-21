@@ -98,6 +98,9 @@ func TestParse_defaultsWhenOmitted(t *testing.T) {
 	if got.Port != 22 {
 		t.Errorf("Port = %d, want %d", got.Port, 22)
 	}
+	if got.IdentityFile != "" {
+		t.Errorf("IdentityFile = %q, want empty string", got.IdentityFile)
+	}
 }
 
 func TestParse_defaultsHostNameToAliasWhenOmitted(t *testing.T) {
@@ -147,6 +150,97 @@ func TestParse_skipsWildcard(t *testing.T) {
 		if host.Alias == "*" {
 			t.Fatalf("expected wildcard host to be skipped")
 		}
+	}
+}
+
+func TestParse_skipsWildcardPatternVariants(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		aliases []string
+	}{
+		{
+			name: "star",
+			config: `
+Host *.internal
+  User deploy
+`,
+			aliases: nil,
+		},
+		{
+			name: "question",
+			config: `
+Host web-?
+  User deploy
+`,
+			aliases: nil,
+		},
+		{
+			name: "bang",
+			config: `
+Host !blocked
+  User deploy
+`,
+			aliases: nil,
+		},
+		{
+			name: "mixed concrete and wildcard patterns",
+			config: `
+Host app-1 *.internal web-? !blocked
+  User deploy
+`,
+			aliases: []string{"app-1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfig(t, tt.config)
+
+			hosts, err := config.Parse(path)
+			if err != nil {
+				t.Fatalf("Parse returned error: %v", err)
+			}
+
+			if len(hosts) != len(tt.aliases) {
+				t.Fatalf("expected %d hosts, got %d: %#v", len(tt.aliases), len(hosts), hosts)
+			}
+			for i, want := range tt.aliases {
+				if hosts[i].Alias != want {
+					t.Errorf("hosts[%d].Alias = %q, want %q", i, hosts[i].Alias, want)
+				}
+			}
+		})
+	}
+}
+
+func TestParse_defaultsPortWhenInvalidOrNotPositive(t *testing.T) {
+	tests := []struct {
+		name string
+		port string
+	}{
+		{name: "invalid", port: "abc"},
+		{name: "zero", port: "0"},
+		{name: "negative", port: "-22"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfig(t, `
+Host app-1
+  Port `+tt.port+`
+`)
+
+			hosts, err := config.Parse(path)
+			if err != nil {
+				t.Fatalf("Parse returned error: %v", err)
+			}
+
+			got := hosts[0]
+			if got.Port != 22 {
+				t.Errorf("Port = %d, want %d", got.Port, 22)
+			}
+		})
 	}
 }
 
