@@ -164,7 +164,7 @@ func ParseMetrics(output string) (uptime string, load float64, memUsed, memTotal
 }
 
 func parseUptimeLine(line string) (string, float64) {
-	re := regexp.MustCompile(`\bup\s+(.+),\s+\d+\s+users?,\s+load average:\s*([0-9]+(?:\.[0-9]+)?)`)
+	re := regexp.MustCompile(`\bup\s+(.+),\s+\d+\s+users?,\s+load averages?:\s*([0-9]+(?:\.[0-9]+)?)`)
 	matches := re.FindStringSubmatch(line)
 	if len(matches) != 3 {
 		return "", 0
