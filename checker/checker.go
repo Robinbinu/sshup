@@ -88,7 +88,10 @@ func checkHostOnce(host config.Host, timeout time.Duration) Result {
 	}
 	deadline := newHostDeadline(timeout)
 
-	hostKeyCallback, err := knownHostsCallbackFunc(deadline)
+	knownHostsCallback := knownHostsCallbackFunc
+	hostKeyCallback, err := runWithDeadline(deadline, "known_hosts setup", func() (ssh.HostKeyCallback, error) {
+		return knownHostsCallback(deadline)
+	})
 	if err != nil {
 		result.Err = err.Error()
 		return result
@@ -98,7 +101,10 @@ func checkHostOnce(host config.Host, timeout time.Duration) Result {
 		return result
 	}
 
-	auth, err := authSetupFunc(host, deadline)
+	authSetup := authSetupFunc
+	auth, err := runWithDeadline(deadline, "auth setup", func() (authSetupResult, error) {
+		return authSetup(host, deadline)
+	})
 	if err != nil {
 		if !deadline.isTimeout(err) {
 			result.Status = StatusAuthErr
@@ -212,6 +218,36 @@ func (d hostDeadline) isTimeout(err error) bool {
 	return d.active() && err != nil && (os.IsTimeout(err) ||
 		strings.Contains(err.Error(), "i/o timeout") ||
 		strings.Contains(err.Error(), "host check timed out after"))
+}
+
+func runWithDeadline[T any](deadline hostDeadline, label string, fn func() (T, error)) (T, error) {
+	var zero T
+	if !deadline.active() {
+		return fn()
+	}
+	if err := deadline.check(); err != nil {
+		return zero, err
+	}
+
+	type result struct {
+		value T
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := fn()
+		done <- result{value: value, err: err}
+	}()
+
+	timer := time.NewTimer(deadline.remaining())
+	defer timer.Stop()
+
+	select {
+	case result := <-done:
+		return result.value, result.err
+	case <-timer.C:
+		return zero, fmt.Errorf("host check timed out after %s during %s", deadline.timeout, label)
+	}
 }
 
 func dialSSHClient(addr string, clientConfig *ssh.ClientConfig, deadline hostDeadline) (*ssh.Client, error) {
@@ -366,7 +402,7 @@ func authSetup(host config.Host, deadline hostDeadline) (authSetupResult, error)
 }
 
 func collectSigners(host config.Host, deadline hostDeadline) ([]ssh.Signer, []io.Closer, error) {
-	fileSigners, fileErr := fileSignerProvider(host)()
+	fileSigners, fileErr := fileSignerProvider(host, deadline)()
 	var signers []ssh.Signer
 	if fileErr == nil {
 		signers = append(signers, fileSigners...)
@@ -414,15 +450,21 @@ func collectSignersFromProviders(providers ...signerProvider) ([]ssh.Signer, err
 	return signers, nil
 }
 
-func fileSignerProvider(host config.Host) signerProvider {
+func fileSignerProvider(host config.Host, deadline hostDeadline) signerProvider {
 	return func() ([]ssh.Signer, error) {
 		paths := identityPaths(host.IdentityFile)
 		var signers []ssh.Signer
 
 		for _, path := range paths {
+			if err := deadline.check(); err != nil {
+				return nil, err
+			}
 			key, err := os.ReadFile(path)
 			if err != nil {
 				continue
+			}
+			if err := deadline.check(); err != nil {
+				return nil, err
 			}
 			signer, err := ssh.ParsePrivateKey(key)
 			if err != nil {
