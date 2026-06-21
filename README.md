@@ -3,18 +3,18 @@
 **Live SSH server health in your terminal — zero config, just `sshup`.**
 
 ```
-sshup — 9 hosts  ·  9 up  ·  checked 14:32:01  ·  next in 28s
+sshup — 9 hosts  ·  8 up  ·  checked 14:32:01  ·  next in 28s
 ─────────────────────────────────────────────────────────────────────────────
 HOST                    STATUS   UPTIME             LOAD    MEM           DISK
-192.0.2.10          UP       3d 2h              1.25    578/8008 MB   62%
-192.0.2.11           UP       919d 15h           2.22    4221/7629 MB  45%
-192.0.2.12           UP       117d 1h            1.83    3100/7813 MB  78%
-192.0.2.13            UP       382d 18h           0.07    512/8192 MB   30%
-192.0.2.14         UP       348d 4h            0.09    800/8008 MB   55%
-192.0.2.15          UP       13d 1h             10.63   6200/7629 MB  88%
-192.0.2.16          UP       11h 50m            0.01    256/8008 MB   12%
-192.0.2.17           UP       398d 6h            0.21    1200/8008 MB  41%
-aws-xwch                DOWN     —                  —       —             —
+web-prod                UP       3d 2h              1.25    578/8008 MB   62%
+db-primary              UP       919d 15h           2.22    4221/7629 MB  45%
+cache-01                UP       117d 1h            1.83    3100/7813 MB  78%
+api-gateway             UP       382d 18h           0.07    512/8192 MB   30%
+worker-eu               UP       348d 4h            0.09    800/8008 MB   55%
+monitor                 UP       13d 1h             10.63   6200/7629 MB  88%
+backup-01               UP       11h 50m            0.01    256/8008 MB   12%
+bastion                 UP       398d 6h            0.21    1200/8008 MB  41%
+dev-box                 DOWN     —                  —       —             —
 ─────────────────────────────────────────────────────────────────────────────
 [r] refresh · [q] quit · [↑/↓] navigate
 ```
