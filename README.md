@@ -3,18 +3,18 @@
 **Live SSH server health in your terminal — zero config, just `sshup`.**
 
 ```
-sshup — 9 hosts  ·  9 up  ·  checked 14:32:01  ·  next in 28s
+sshup — 9 hosts  ·  8 up  ·  checked 14:32:01  ·  next in 28s
 ─────────────────────────────────────────────────────────────────────────────
-HOST                    STATUS   UPTIME             LOAD    MEM           DISK
-192.0.2.10          UP       3d 2h              1.25    578/8008 MB   62%
-192.0.2.11           UP       919d 15h           2.22    4221/7629 MB  45%
-192.0.2.12           UP       117d 1h            1.83    3100/7813 MB  78%
-192.0.2.13            UP       382d 18h           0.07    512/8192 MB   30%
-192.0.2.14         UP       348d 4h            0.09    800/8008 MB   55%
-192.0.2.15          UP       13d 1h             10.63   6200/7629 MB  88%
-192.0.2.16          UP       11h 50m            0.01    256/8008 MB   12%
-192.0.2.17           UP       398d 6h            0.21    1200/8008 MB  41%
-aws-xwch                DOWN     —                  —       —             —
+HOST                   STATUS    UPTIME              LOAD    MEM          DISK
+prod-api-server        UP        12d 4h              0.82    1240/4096 MB 31%
+prod-db-primary        UP        347d 6h             2.10    3891/8192 MB 72%
+prod-db-replica        UP        347d 5h             0.43    3102/8192 MB 71%
+cache-redis-east       UP        89d 14h             0.05    512/2048 MB  18%
+worker-east-01         UP        14d 2h              1.67    2100/4096 MB 54%
+worker-west-01         UP        14d 1h              1.44    1900/4096 MB 52%
+bastion-prod           UP        391d 22h            0.01    128/2048 MB  12%
+monitoring-srv         UP        28d 9h              0.33    900/4096 MB  41%
+dev-workstation        DOWN      —                   —       —            —
 ─────────────────────────────────────────────────────────────────────────────
 [r] refresh · [q] quit · [↑/↓] navigate
 ```

@@ -402,22 +402,26 @@ func authSetup(host config.Host, deadline hostDeadline) (authSetupResult, error)
 }
 
 func collectSigners(host config.Host, deadline hostDeadline) ([]ssh.Signer, []io.Closer, error) {
-	// Establish the agent connection up front so we can track its closer.
-	agentSigners, agentConn, agentErr := agentSignerProvider(deadline)
+	providers := []signerProvider{fileSignerProvider(host, deadline)}
 
 	var closers []io.Closer
-	if agentConn != nil {
-		closers = append(closers, agentConn)
-	}
 
-	// Build provider list. Agent provider is only included when the connection
-	// succeeded and returned signers.
-	providers := []signerProvider{fileSignerProvider(host, deadline)}
-	if agentErr == nil && len(agentSigners) > 0 {
-		captured := agentSigners
-		providers = append(providers, func() ([]ssh.Signer, error) {
-			return captured, nil
-		})
+	// IdentitiesOnly yes means only use the explicitly configured key files —
+	// skip the SSH agent to avoid exhausting MaxAuthTries with unrelated keys.
+	var agentErr error
+	if !host.IdentitiesOnly {
+		var agentSigners []ssh.Signer
+		var agentConn io.Closer
+		agentSigners, agentConn, agentErr = agentSignerProvider(deadline)
+		if agentConn != nil {
+			closers = append(closers, agentConn)
+		}
+		if agentErr == nil && len(agentSigners) > 0 {
+			captured := agentSigners
+			providers = append(providers, func() ([]ssh.Signer, error) {
+				return captured, nil
+			})
+		}
 	}
 
 	signers, err := collectSignersFromProviders(providers...)
