@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/sshup/sshup/config"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const remoteCmd = "uptime; free -m 2>/dev/null | awk '/Mem:/{print $2,$3}'; df / 2>/dev/null | awk 'NR==2{print $5}'"
@@ -79,6 +82,12 @@ func checkHost(host config.Host, timeout time.Duration) Result {
 		Status: StatusDown,
 	}
 
+	hostKeyCallback, err := knownHostsCallback()
+	if err != nil {
+		result.Err = err.Error()
+		return result
+	}
+
 	methods, err := authMethods(host)
 	if err != nil {
 		result.Status = StatusAuthErr
@@ -89,7 +98,7 @@ func checkHost(host config.Host, timeout time.Duration) Result {
 	clientConfig := &ssh.ClientConfig{
 		User:            host.User,
 		Auth:            methods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         timeout,
 	}
 
@@ -119,7 +128,7 @@ func checkHost(host config.Host, timeout time.Duration) Result {
 	}
 	defer session.Close()
 
-	output, err := session.Output(remoteCmd)
+	output, err := runRemoteCommand(session, remoteCmd, timeout, client)
 	if err != nil {
 		result.Err = err.Error()
 		return result
@@ -163,6 +172,46 @@ func ParseMetrics(output string) (uptime string, load float64, memUsed, memTotal
 	return uptime, load, memUsed, memTotal, diskPct
 }
 
+type commandSession interface {
+	Output(string) ([]byte, error)
+	Close() error
+}
+
+type closer interface {
+	Close() error
+}
+
+func runRemoteCommand(session commandSession, cmd string, timeout time.Duration, extraClosers ...closer) ([]byte, error) {
+	if timeout <= 0 {
+		return session.Output(cmd)
+	}
+
+	type commandResult struct {
+		output []byte
+		err    error
+	}
+
+	done := make(chan commandResult, 1)
+	go func() {
+		output, err := session.Output(cmd)
+		done <- commandResult{output: output, err: err}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-done:
+		return result.output, result.err
+	case <-timer.C:
+		_ = session.Close()
+		for _, closer := range extraClosers {
+			_ = closer.Close()
+		}
+		return nil, fmt.Errorf("remote command timed out after %s", timeout)
+	}
+}
+
 func parseUptimeLine(line string) (string, float64) {
 	re := regexp.MustCompile(`\bup\s+(.+),\s+\d+\s+users?,\s+load averages?:\s*([0-9]+(?:\.[0-9]+)?)`)
 	matches := re.FindStringSubmatch(line)
@@ -194,11 +243,40 @@ func authMethods(host config.Host) ([]ssh.AuthMethod, error) {
 		methods = append(methods, ssh.PublicKeys(signer))
 	}
 
+	if agentMethod, ok := agentAuthMethod(); ok {
+		methods = append(methods, agentMethod)
+	}
+
 	if len(methods) == 0 {
 		return nil, fmt.Errorf("no usable SSH keys found")
 	}
 
 	return methods, nil
+}
+
+func agentAuthMethod() (ssh.AuthMethod, bool) {
+	sock := os.Getenv("SSH_AUTH_SOCK")
+	if strings.TrimSpace(sock) == "" {
+		return nil, false
+	}
+
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return nil, false
+	}
+
+	agentClient := agent.NewClient(conn)
+	return ssh.PublicKeysCallback(agentClient.Signers), true
+}
+
+func knownHostsCallback() (ssh.HostKeyCallback, error) {
+	path := expandHome("~/.ssh/known_hosts")
+	callback, err := knownhosts.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("known_hosts verification unavailable at %s: %w", path, err)
+	}
+
+	return callback, nil
 }
 
 func identityPaths(identityFile string) []string {
