@@ -120,10 +120,10 @@ func TestCheckHostOnceTimesOutDuringSSHHandshake(t *testing.T) {
 	}()
 
 	originalKnownHosts := knownHostsCallbackFunc
-	originalAuthMethods := authMethodsFunc
+	originalAuthSetup := authSetupFunc
 	t.Cleanup(func() {
 		knownHostsCallbackFunc = originalKnownHosts
-		authMethodsFunc = originalAuthMethods
+		authSetupFunc = originalAuthSetup
 		select {
 		case conn := <-accepted:
 			_ = conn.Close()
@@ -131,11 +131,11 @@ func TestCheckHostOnceTimesOutDuringSSHHandshake(t *testing.T) {
 		}
 	})
 
-	knownHostsCallbackFunc = func() (ssh.HostKeyCallback, error) {
+	knownHostsCallbackFunc = func(hostDeadline) (ssh.HostKeyCallback, error) {
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
-	authMethodsFunc = func(config.Host) ([]ssh.AuthMethod, error) {
-		return []ssh.AuthMethod{ssh.Password("unused")}, nil
+	authSetupFunc = func(config.Host, hostDeadline) (authSetupResult, error) {
+		return authSetupResult{methods: []ssh.AuthMethod{ssh.Password("unused")}}, nil
 	}
 
 	hostName, portText, err := net.SplitHostPort(listener.Addr().String())
@@ -156,6 +156,58 @@ func TestCheckHostOnceTimesOutDuringSSHHandshake(t *testing.T) {
 	}
 	if !strings.Contains(result.Err, "host check timed out after 10ms") {
 		t.Fatalf("Err = %q, want host check timeout", result.Err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %s, want under 500ms", elapsed)
+	}
+}
+
+func TestCheckHostDeadlineStartsBeforeAuthSetup(t *testing.T) {
+	originalKnownHosts := knownHostsCallbackFunc
+	originalAuthSetup := authSetupFunc
+	t.Cleanup(func() {
+		knownHostsCallbackFunc = originalKnownHosts
+		authSetupFunc = originalAuthSetup
+	})
+
+	knownHostsCallbackFunc = func(hostDeadline) (ssh.HostKeyCallback, error) {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	authSetupFunc = func(config.Host, hostDeadline) (authSetupResult, error) {
+		time.Sleep(20 * time.Millisecond)
+		return authSetupResult{methods: []ssh.AuthMethod{ssh.Password("unused")}}, nil
+	}
+
+	start := time.Now()
+	result := checkHost(config.Host{Alias: "auth-slow", HostName: "127.0.0.1", Port: 1}, 10*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if result.Status != StatusDown {
+		t.Fatalf("Status = %s, want %s", result.Status, StatusDown)
+	}
+	if !strings.Contains(result.Err, "host check timed out after 10ms") {
+		t.Fatalf("Err = %q, want host check timeout", result.Err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %s, want under 500ms", elapsed)
+	}
+}
+
+func TestAgentSignerProviderAppliesDeadlineToSigners(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	deadline := newHostDeadline(10 * time.Millisecond)
+	start := time.Now()
+	_, err := agentSignersFromConn(clientConn, deadline)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("agentSignersFromConn returned nil error, want timeout")
+	}
+	if !strings.Contains(err.Error(), "host check timed out after 10ms") {
+		t.Fatalf("error = %q, want host check timeout", err.Error())
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("timeout took %s, want under 500ms", elapsed)
@@ -204,9 +256,9 @@ func TestCollectSignersSkipsUnavailableProviders(t *testing.T) {
 
 func TestApplyConnDeadlineSetsDeadlineWhenTimeoutPositive(t *testing.T) {
 	conn := &fakeNetConn{}
-	deadline := time.Now().Add(time.Second)
+	deadline := newHostDeadline(time.Second)
 
-	if err := applyConnDeadline(conn, deadline, time.Second); err != nil {
+	if err := applyConnDeadline(conn, deadline); err != nil {
 		t.Fatalf("applyConnDeadline returned error: %v", err)
 	}
 	if conn.deadline.IsZero() {
@@ -217,7 +269,7 @@ func TestApplyConnDeadlineSetsDeadlineWhenTimeoutPositive(t *testing.T) {
 func TestApplyConnDeadlineSkipsDeadlineWhenTimeoutNonPositive(t *testing.T) {
 	conn := &fakeNetConn{}
 
-	if err := applyConnDeadline(conn, time.Time{}, 0); err != nil {
+	if err := applyConnDeadline(conn, newHostDeadline(0)); err != nil {
 		t.Fatalf("applyConnDeadline returned error: %v", err)
 	}
 	if !conn.deadline.IsZero() {
