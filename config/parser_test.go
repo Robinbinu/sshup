@@ -5,7 +5,7 @@ import (
 	"os/user"
 	"testing"
 
-	"github.com/sshup/sshup/config"
+	"github.com/Robinbinu/sshup/config"
 )
 
 const sampleConfig = `

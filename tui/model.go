@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/sshup/sshup/checker"
-	"github.com/sshup/sshup/config"
+	"github.com/Robinbinu/sshup/checker"
+	"github.com/Robinbinu/sshup/config"
 )
 
 // Go 1.22 has builtin max — no local definition needed.

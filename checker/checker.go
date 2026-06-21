@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sshup/sshup/config"
+	"github.com/Robinbinu/sshup/config"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
