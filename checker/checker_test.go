@@ -1,9 +1,11 @@
-package checker_test
+package checker
 
 import (
+	"errors"
+	"strings"
+	"sync"
 	"testing"
-
-	"github.com/sshup/sshup/checker"
+	"time"
 )
 
 func TestParseMetrics(t *testing.T) {
@@ -56,7 +58,7 @@ func TestParseMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uptime, load, memUsed, memTotal, diskPct := checker.ParseMetrics(tt.output)
+			uptime, load, memUsed, memTotal, diskPct := ParseMetrics(tt.output)
 
 			if uptime != tt.wantUptime {
 				t.Fatalf("uptime = %q, want %q", uptime, tt.wantUptime)
@@ -75,4 +77,107 @@ func TestParseMetrics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStatusString(t *testing.T) {
+	tests := []struct {
+		status Status
+		want   string
+	}{
+		{status: StatusPending, want: "..."},
+		{status: StatusUp, want: "UP"},
+		{status: StatusDown, want: "DOWN"},
+		{status: StatusAuthErr, want: "AUTH ERR"},
+		{status: Status(99), want: "UNKNOWN"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.status.String(); got != tt.want {
+			t.Fatalf("Status(%d).String() = %q, want %q", tt.status, got, tt.want)
+		}
+	}
+}
+
+func TestRunRemoteCommandReturnsOutput(t *testing.T) {
+	session := newFakeCommandSession(0, []byte("ok\n"), nil)
+
+	output, err := runRemoteCommand(session, "uptime", time.Second)
+	if err != nil {
+		t.Fatalf("runRemoteCommand returned error: %v", err)
+	}
+	if string(output) != "ok\n" {
+		t.Fatalf("output = %q, want %q", string(output), "ok\n")
+	}
+	if session.wasClosed() {
+		t.Fatal("session was closed on successful command")
+	}
+}
+
+func TestRunRemoteCommandTimesOutAndClosesSession(t *testing.T) {
+	session := newFakeCommandSession(time.Hour, nil, nil)
+
+	start := time.Now()
+	_, err := runRemoteCommand(session, "uptime", 10*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("runRemoteCommand returned nil error, want timeout")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("error = %q, want timeout message", err.Error())
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %s, want under 500ms", elapsed)
+	}
+	if !session.wasClosed() {
+		t.Fatal("session was not closed after timeout")
+	}
+}
+
+type fakeCommandSession struct {
+	delay    time.Duration
+	output   []byte
+	err      error
+	closeCh  chan struct{}
+	closeErr error
+
+	mu     sync.Mutex
+	closed bool
+}
+
+func newFakeCommandSession(delay time.Duration, output []byte, err error) *fakeCommandSession {
+	return &fakeCommandSession{
+		delay:   delay,
+		output:  output,
+		err:     err,
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (s *fakeCommandSession) Output(string) ([]byte, error) {
+	select {
+	case <-time.After(s.delay):
+		return s.output, s.err
+	case <-s.closeCh:
+		return nil, errors.New("session closed")
+	}
+}
+
+func (s *fakeCommandSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.closed {
+		close(s.closeCh)
+		s.closed = true
+	}
+
+	return s.closeErr
+}
+
+func (s *fakeCommandSession) wasClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.closed
 }
