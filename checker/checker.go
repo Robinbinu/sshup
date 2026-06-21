@@ -76,7 +76,35 @@ func Check(hosts []config.Host, timeout time.Duration) <-chan Result {
 	return results
 }
 
+var checkHostOnceFunc = checkHostOnce
+
 func checkHost(host config.Host, timeout time.Duration) Result {
+	checkOnce := checkHostOnceFunc
+	if timeout <= 0 {
+		return checkOnce(host, timeout)
+	}
+
+	results := make(chan Result, 1)
+	go func() {
+		results <- checkOnce(host, timeout)
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-results:
+		return result
+	case <-timer.C:
+		return Result{
+			Alias:  host.Alias,
+			Status: StatusDown,
+			Err:    fmt.Sprintf("host check timed out after %s", timeout),
+		}
+	}
+}
+
+func checkHostOnce(host config.Host, timeout time.Duration) Result {
 	result := Result{
 		Alias:  host.Alias,
 		Status: StatusDown,
