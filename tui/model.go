@@ -87,7 +87,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ResultMsg:
 		r := checker.Result(msg)
 		m.results[r.Alias] = r
-		return m, waitForResultCmd(m.resultCh)
+		if m.resultCh != nil {
+			return m, waitForResultCmd(m.resultCh)
+		}
+		return m, nil
 
 	case checkDoneMsg:
 		m.checking = false
