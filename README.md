@@ -25,25 +25,49 @@ aws-xwch                DOWN     —                  —       —             
 
 ## Install
 
-**Homebrew / Go install:**
+### macOS
+
+**Apple Silicon (M1/M2/M3):**
 ```bash
-go install github.com/Robinbinu/sshup@latest
+curl -L https://github.com/Robinbinu/sshup/releases/latest/download/sshup_darwin_arm64 -o sshup
+chmod +x sshup && sudo mv sshup /usr/local/bin/
 ```
 
-**Prebuilt binary** — download from [Releases](https://github.com/Robinbinu/sshup/releases):
+**Intel:**
+```bash
+curl -L https://github.com/Robinbinu/sshup/releases/latest/download/sshup_darwin_amd64 -o sshup
+chmod +x sshup && sudo mv sshup /usr/local/bin/
+```
 
-| Platform | Download |
-|----------|----------|
-| macOS (Apple Silicon) | `sshup_darwin_arm64` |
-| macOS (Intel) | `sshup_darwin_amd64` |
-| Linux x86-64 | `sshup_linux_amd64` |
-| Linux ARM64 | `sshup_linux_arm64` |
-| Windows x86-64 | `sshup_windows_amd64.exe` |
-| Windows ARM64 | `sshup_windows_arm64.exe` |
+> **Gatekeeper:** On first run macOS may block the binary with "unverified developer". Fix it:
+> ```bash
+> xattr -d com.apple.quarantine /usr/local/bin/sshup
+> ```
+
+### Linux
+
+**x86-64:**
+```bash
+curl -L https://github.com/Robinbinu/sshup/releases/latest/download/sshup_linux_amd64 -o sshup
+chmod +x sshup && sudo mv sshup /usr/local/bin/
+```
+
+**ARM64** (Raspberry Pi, AWS Graviton, etc.):
+```bash
+curl -L https://github.com/Robinbinu/sshup/releases/latest/download/sshup_linux_arm64 -o sshup
+chmod +x sshup && sudo mv sshup /usr/local/bin/
+```
+
+### Windows
+
+Download `sshup_windows_amd64.exe` (or `sshup_windows_arm64.exe`) from the [Releases page](https://github.com/Robinbinu/sshup/releases/latest), rename it to `sshup.exe`, and move it anywhere on your `PATH`.
+
+Run in **Windows Terminal** or **PowerShell** — not CMD (no color support).
+
+### Via Go
 
 ```bash
-# macOS / Linux — make executable and move to PATH
-chmod +x sshup_* && sudo mv sshup_* /usr/local/bin/sshup
+go install github.com/Robinbinu/sshup@latest
 ```
 
 ---
@@ -112,9 +136,8 @@ Auth uses your SSH agent (if running) plus any `IdentityFile` keys from your con
 
 ## Requirements
 
-- Go 1.22+ (for `go install`)
 - SSH key auth configured for your hosts
-- Hosts in `~/.ssh/known_hosts` (first-time SSH users: run `ssh <host>` once to add them)
+- Hosts must be in `~/.ssh/known_hosts` — if you've SSH'd into them before, they're already there
 
 ---
 
