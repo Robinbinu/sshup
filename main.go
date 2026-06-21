@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/sshup/sshup/config"
-	"github.com/sshup/sshup/tui"
+	"github.com/Robinbinu/sshup/config"
+	"github.com/Robinbinu/sshup/tui"
 )
 
 func main() {

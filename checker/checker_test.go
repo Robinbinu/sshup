@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sshup/sshup/config"
+	"github.com/Robinbinu/sshup/config"
 	"golang.org/x/crypto/ssh"
 )
 
