@@ -402,31 +402,32 @@ func authSetup(host config.Host, deadline hostDeadline) (authSetupResult, error)
 }
 
 func collectSigners(host config.Host, deadline hostDeadline) ([]ssh.Signer, []io.Closer, error) {
-	fileSigners, fileErr := fileSignerProvider(host, deadline)()
-	var signers []ssh.Signer
-	if fileErr == nil {
-		signers = append(signers, fileSigners...)
-	}
-
+	// Establish the agent connection up front so we can track its closer.
 	agentSigners, agentConn, agentErr := agentSignerProvider(deadline)
-	if agentErr == nil {
-		signers = append(signers, agentSigners...)
-	}
 
 	var closers []io.Closer
 	if agentConn != nil {
 		closers = append(closers, agentConn)
 	}
 
-	if len(signers) == 0 {
+	// Build provider list. Agent provider is only included when the connection
+	// succeeded and returned signers.
+	providers := []signerProvider{fileSignerProvider(host, deadline)}
+	if agentErr == nil && len(agentSigners) > 0 {
+		captured := agentSigners
+		providers = append(providers, func() ([]ssh.Signer, error) {
+			return captured, nil
+		})
+	}
+
+	signers, err := collectSignersFromProviders(providers...)
+	if err != nil {
 		closeAll(closers)
-		if deadline.isTimeout(fileErr) {
-			return nil, nil, fileErr
-		}
+		// Surface the most useful deadline error if either provider timed out.
 		if deadline.isTimeout(agentErr) {
 			return nil, nil, agentErr
 		}
-		return nil, nil, fmt.Errorf("no usable SSH keys found")
+		return nil, nil, err
 	}
 
 	return signers, closers, nil
@@ -452,7 +453,7 @@ func collectSignersFromProviders(providers ...signerProvider) ([]ssh.Signer, err
 
 func fileSignerProvider(host config.Host, deadline hostDeadline) signerProvider {
 	return func() ([]ssh.Signer, error) {
-		paths := identityPaths(host.IdentityFile)
+		paths := identityPaths(host.IdentityFiles)
 		var signers []ssh.Signer
 
 		for _, path := range paths {
@@ -550,9 +551,15 @@ func knownHostsCallback(hostDeadline) (ssh.HostKeyCallback, error) {
 	return callback, nil
 }
 
-func identityPaths(identityFile string) []string {
-	if strings.TrimSpace(identityFile) != "" {
-		return []string{expandHome(identityFile)}
+func identityPaths(identityFiles []string) []string {
+	var specified []string
+	for _, f := range identityFiles {
+		if strings.TrimSpace(f) != "" {
+			specified = append(specified, expandHome(f))
+		}
+	}
+	if len(specified) > 0 {
+		return specified
 	}
 
 	return []string{

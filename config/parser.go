@@ -10,11 +10,11 @@ import (
 )
 
 type Host struct {
-	Alias        string
-	HostName     string
-	User         string
-	Port         int
-	IdentityFile string
+	Alias         string
+	HostName      string
+	User          string
+	Port          int
+	IdentityFiles []string
 }
 
 func Parse(path string) ([]Host, error) {
@@ -62,17 +62,17 @@ func Parse(path string) ([]Host, error) {
 				port = parsedPort
 			}
 
-			identityFile, err := cfg.Get(alias, "IdentityFile")
+			identityFiles, err := cfg.GetAll(alias, "IdentityFile")
 			if err != nil {
 				return nil, err
 			}
 
 			hosts = append(hosts, Host{
-				Alias:        alias,
-				HostName:     hostName,
-				User:         hostUser,
-				Port:         port,
-				IdentityFile: identityFile,
+				Alias:         alias,
+				HostName:      hostName,
+				User:          hostUser,
+				Port:          port,
+				IdentityFiles: identityFiles,
 			})
 		}
 	}
