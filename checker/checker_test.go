@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sshup/sshup/config"
 )
 
 func TestParseMetrics(t *testing.T) {
@@ -95,6 +97,57 @@ func TestStatusString(t *testing.T) {
 		if got := tt.status.String(); got != tt.want {
 			t.Fatalf("Status(%d).String() = %q, want %q", tt.status, got, tt.want)
 		}
+	}
+}
+
+func TestCheckHostTimesOutWholeCheck(t *testing.T) {
+	original := checkHostOnceFunc
+	block := make(chan struct{})
+	t.Cleanup(func() {
+		checkHostOnceFunc = original
+		close(block)
+	})
+
+	checkHostOnceFunc = func(host config.Host, timeout time.Duration) Result {
+		<-block
+		return Result{Alias: host.Alias, Status: StatusUp}
+	}
+
+	host := config.Host{Alias: "slow-host"}
+	start := time.Now()
+	result := checkHost(host, 10*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if result.Alias != host.Alias {
+		t.Fatalf("Alias = %q, want %q", result.Alias, host.Alias)
+	}
+	if result.Status != StatusDown {
+		t.Fatalf("Status = %s, want %s", result.Status, StatusDown)
+	}
+	if !strings.Contains(result.Err, "host check timed out after 10ms") {
+		t.Fatalf("Err = %q, want host timeout", result.Err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %s, want under 500ms", elapsed)
+	}
+}
+
+func TestCheckHostNoDeadlineWaitsForInnerResult(t *testing.T) {
+	original := checkHostOnceFunc
+	t.Cleanup(func() {
+		checkHostOnceFunc = original
+	})
+
+	checkHostOnceFunc = func(host config.Host, timeout time.Duration) Result {
+		return Result{Alias: host.Alias, Status: StatusUp}
+	}
+
+	result := checkHost(config.Host{Alias: "ready-host"}, 0)
+	if result.Status != StatusUp {
+		t.Fatalf("Status = %s, want %s", result.Status, StatusUp)
+	}
+	if result.Alias != "ready-host" {
+		t.Fatalf("Alias = %q, want ready-host", result.Alias)
 	}
 }
 
