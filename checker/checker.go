@@ -76,32 +76,8 @@ func Check(hosts []config.Host, timeout time.Duration) <-chan Result {
 	return results
 }
 
-var checkHostOnceFunc = checkHostOnce
-
 func checkHost(host config.Host, timeout time.Duration) Result {
-	checkOnce := checkHostOnceFunc
-	if timeout <= 0 {
-		return checkOnce(host, timeout)
-	}
-
-	results := make(chan Result, 1)
-	go func() {
-		results <- checkOnce(host, timeout)
-	}()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case result := <-results:
-		return result
-	case <-timer.C:
-		return Result{
-			Alias:  host.Alias,
-			Status: StatusDown,
-			Err:    fmt.Sprintf("host check timed out after %s", timeout),
-		}
-	}
+	return checkHostOnce(host, timeout)
 }
 
 func checkHostOnce(host config.Host, timeout time.Duration) Result {
@@ -110,13 +86,13 @@ func checkHostOnce(host config.Host, timeout time.Duration) Result {
 		Status: StatusDown,
 	}
 
-	hostKeyCallback, err := knownHostsCallback()
+	hostKeyCallback, err := knownHostsCallbackFunc()
 	if err != nil {
 		result.Err = err.Error()
 		return result
 	}
 
-	methods, err := authMethods(host)
+	methods, err := authMethodsFunc(host)
 	if err != nil {
 		result.Status = StatusAuthErr
 		result.Err = err.Error()
@@ -139,7 +115,13 @@ func checkHostOnce(host config.Host, timeout time.Duration) Result {
 		port = 22
 	}
 
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", hostName, port), clientConfig)
+	addr := fmt.Sprintf("%s:%d", hostName, port)
+	deadline := time.Time{}
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+
+	client, err := dialSSHClient(addr, clientConfig, timeout, deadline)
 	if err != nil {
 		if isAuthError(err) {
 			result.Status = StatusAuthErr
@@ -156,7 +138,7 @@ func checkHostOnce(host config.Host, timeout time.Duration) Result {
 	}
 	defer session.Close()
 
-	output, err := runRemoteCommand(session, remoteCmd, timeout, client)
+	output, err := runRemoteCommand(session, remoteCmd, remainingTimeout(deadline, timeout), client)
 	if err != nil {
 		result.Err = err.Error()
 		return result
@@ -165,6 +147,60 @@ func checkHostOnce(host config.Host, timeout time.Duration) Result {
 	result.Uptime, result.Load, result.MemUsed, result.MemTotal, result.DiskPct = ParseMetrics(string(output))
 	result.Status = StatusUp
 	return result
+}
+
+func dialSSHClient(addr string, clientConfig *ssh.ClientConfig, timeout time.Duration, deadline time.Time) (*ssh.Client, error) {
+	conn, err := dialTCP(addr, timeout)
+	if err != nil {
+		return nil, hostCheckError(timeout, err)
+	}
+
+	if err := applyConnDeadline(conn, deadline, timeout); err != nil {
+		_ = conn.Close()
+		return nil, hostCheckError(timeout, err)
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientConfig)
+	if err != nil {
+		_ = conn.Close()
+		return nil, hostCheckError(timeout, err)
+	}
+
+	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+func hostCheckError(timeout time.Duration, err error) error {
+	if timeout > 0 && (os.IsTimeout(err) || strings.Contains(err.Error(), "i/o timeout")) {
+		return fmt.Errorf("host check timed out after %s: %w", timeout, err)
+	}
+	return err
+}
+
+func dialTCP(addr string, timeout time.Duration) (net.Conn, error) {
+	if timeout > 0 {
+		return net.DialTimeout("tcp", addr, timeout)
+	}
+	return net.Dial("tcp", addr)
+}
+
+func applyConnDeadline(conn net.Conn, deadline time.Time, timeout time.Duration) error {
+	if timeout <= 0 {
+		return nil
+	}
+	return conn.SetDeadline(deadline)
+}
+
+func remainingTimeout(deadline time.Time, fallback time.Duration) time.Duration {
+	if fallback <= 0 || deadline.IsZero() {
+		return fallback
+	}
+
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return time.Nanosecond
+	}
+
+	return remaining
 }
 
 func ParseMetrics(output string) (uptime string, load float64, memUsed, memTotal, diskPct int) {
@@ -255,46 +291,90 @@ func parseUptimeLine(line string) (string, float64) {
 	return strings.TrimSpace(matches[1]), load
 }
 
+var authMethodsFunc = authMethods
+var knownHostsCallbackFunc = knownHostsCallback
+
+type signerProvider func() ([]ssh.Signer, error)
+
 func authMethods(host config.Host) ([]ssh.AuthMethod, error) {
-	paths := identityPaths(host.IdentityFile)
-	var methods []ssh.AuthMethod
+	signers, err := collectSigners(host)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, path := range paths {
-		key, err := os.ReadFile(path)
+	return []ssh.AuthMethod{ssh.PublicKeys(signers...)}, nil
+}
+
+func collectSigners(host config.Host) ([]ssh.Signer, error) {
+	return collectSignersFromProviders(fileSignerProvider(host), agentSignerProvider)
+}
+
+func collectSignersFromProviders(providers ...signerProvider) ([]ssh.Signer, error) {
+	var signers []ssh.Signer
+
+	for _, provider := range providers {
+		providerSigners, err := provider()
 		if err != nil {
 			continue
 		}
-		signer, err := ssh.ParsePrivateKey(key)
-		if err != nil {
-			continue
-		}
-		methods = append(methods, ssh.PublicKeys(signer))
+		signers = append(signers, providerSigners...)
 	}
 
-	if agentMethod, ok := agentAuthMethod(); ok {
-		methods = append(methods, agentMethod)
-	}
-
-	if len(methods) == 0 {
+	if len(signers) == 0 {
 		return nil, fmt.Errorf("no usable SSH keys found")
 	}
 
-	return methods, nil
+	return signers, nil
 }
 
-func agentAuthMethod() (ssh.AuthMethod, bool) {
+func fileSignerProvider(host config.Host) signerProvider {
+	return func() ([]ssh.Signer, error) {
+		paths := identityPaths(host.IdentityFile)
+		var signers []ssh.Signer
+
+		for _, path := range paths {
+			key, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			signer, err := ssh.ParsePrivateKey(key)
+			if err != nil {
+				continue
+			}
+			signers = append(signers, signer)
+		}
+
+		if len(signers) == 0 {
+			return nil, fmt.Errorf("no usable key files found")
+		}
+
+		return signers, nil
+	}
+}
+
+func agentSignerProvider() ([]ssh.Signer, error) {
 	sock := os.Getenv("SSH_AUTH_SOCK")
 	if strings.TrimSpace(sock) == "" {
-		return nil, false
+		return nil, fmt.Errorf("SSH_AUTH_SOCK is not set")
 	}
 
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 
 	agentClient := agent.NewClient(conn)
-	return ssh.PublicKeysCallback(agentClient.Signers), true
+	signers, err := agentClient.Signers()
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if len(signers) == 0 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("SSH agent has no signers")
+	}
+
+	return signers, nil
 }
 
 func knownHostsCallback() (ssh.HostKeyCallback, error) {

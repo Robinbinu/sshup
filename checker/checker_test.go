@@ -2,12 +2,16 @@ package checker
 
 import (
 	"errors"
+	"io"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sshup/sshup/config"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestParseMetrics(t *testing.T) {
@@ -100,54 +104,124 @@ func TestStatusString(t *testing.T) {
 	}
 }
 
-func TestCheckHostTimesOutWholeCheck(t *testing.T) {
-	original := checkHostOnceFunc
-	block := make(chan struct{})
+func TestCheckHostOnceTimesOutDuringSSHHandshake(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen returned error: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	originalKnownHosts := knownHostsCallbackFunc
+	originalAuthMethods := authMethodsFunc
 	t.Cleanup(func() {
-		checkHostOnceFunc = original
-		close(block)
+		knownHostsCallbackFunc = originalKnownHosts
+		authMethodsFunc = originalAuthMethods
+		select {
+		case conn := <-accepted:
+			_ = conn.Close()
+		default:
+		}
 	})
 
-	checkHostOnceFunc = func(host config.Host, timeout time.Duration) Result {
-		<-block
-		return Result{Alias: host.Alias, Status: StatusUp}
+	knownHostsCallbackFunc = func() (ssh.HostKeyCallback, error) {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	authMethodsFunc = func(config.Host) ([]ssh.AuthMethod, error) {
+		return []ssh.AuthMethod{ssh.Password("unused")}, nil
 	}
 
-	host := config.Host{Alias: "slow-host"}
+	hostName, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort returned error: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("Atoi returned error: %v", err)
+	}
+
 	start := time.Now()
-	result := checkHost(host, 10*time.Millisecond)
+	result := checkHost(config.Host{Alias: "slow-host", HostName: hostName, Port: port}, 10*time.Millisecond)
 	elapsed := time.Since(start)
 
-	if result.Alias != host.Alias {
-		t.Fatalf("Alias = %q, want %q", result.Alias, host.Alias)
-	}
 	if result.Status != StatusDown {
 		t.Fatalf("Status = %s, want %s", result.Status, StatusDown)
 	}
 	if !strings.Contains(result.Err, "host check timed out after 10ms") {
-		t.Fatalf("Err = %q, want host timeout", result.Err)
+		t.Fatalf("Err = %q, want host check timeout", result.Err)
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("timeout took %s, want under 500ms", elapsed)
 	}
 }
 
-func TestCheckHostNoDeadlineWaitsForInnerResult(t *testing.T) {
-	original := checkHostOnceFunc
-	t.Cleanup(func() {
-		checkHostOnceFunc = original
-	})
+func TestCollectSignersCombinesFileAndAgentSigners(t *testing.T) {
+	fileSigner := fakeSigner{name: "file"}
+	agentSigner := fakeSigner{name: "agent"}
 
-	checkHostOnceFunc = func(host config.Host, timeout time.Duration) Result {
-		return Result{Alias: host.Alias, Status: StatusUp}
+	signers, err := collectSignersFromProviders(
+		func() ([]ssh.Signer, error) {
+			return []ssh.Signer{fileSigner}, nil
+		},
+		func() ([]ssh.Signer, error) {
+			return []ssh.Signer{agentSigner}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("collectSignersFromProviders returned error: %v", err)
 	}
+	if len(signers) != 2 {
+		t.Fatalf("len(signers) = %d, want 2", len(signers))
+	}
+	if signers[0] != fileSigner || signers[1] != agentSigner {
+		t.Fatalf("signers = %#v, want file then agent", signers)
+	}
+}
 
-	result := checkHost(config.Host{Alias: "ready-host"}, 0)
-	if result.Status != StatusUp {
-		t.Fatalf("Status = %s, want %s", result.Status, StatusUp)
+func TestCollectSignersSkipsUnavailableProviders(t *testing.T) {
+	signers, err := collectSignersFromProviders(
+		func() ([]ssh.Signer, error) {
+			return nil, errors.New("missing key")
+		},
+		func() ([]ssh.Signer, error) {
+			return []ssh.Signer{fakeSigner{name: "agent"}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("collectSignersFromProviders returned error: %v", err)
 	}
-	if result.Alias != "ready-host" {
-		t.Fatalf("Alias = %q, want ready-host", result.Alias)
+	if len(signers) != 1 {
+		t.Fatalf("len(signers) = %d, want 1", len(signers))
+	}
+}
+
+func TestApplyConnDeadlineSetsDeadlineWhenTimeoutPositive(t *testing.T) {
+	conn := &fakeNetConn{}
+	deadline := time.Now().Add(time.Second)
+
+	if err := applyConnDeadline(conn, deadline, time.Second); err != nil {
+		t.Fatalf("applyConnDeadline returned error: %v", err)
+	}
+	if conn.deadline.IsZero() {
+		t.Fatal("deadline was not set")
+	}
+}
+
+func TestApplyConnDeadlineSkipsDeadlineWhenTimeoutNonPositive(t *testing.T) {
+	conn := &fakeNetConn{}
+
+	if err := applyConnDeadline(conn, time.Time{}, 0); err != nil {
+		t.Fatalf("applyConnDeadline returned error: %v", err)
+	}
+	if !conn.deadline.IsZero() {
+		t.Fatalf("deadline = %v, want zero", conn.deadline)
 	}
 }
 
@@ -233,4 +307,53 @@ func (s *fakeCommandSession) wasClosed() bool {
 	defer s.mu.Unlock()
 
 	return s.closed
+}
+
+type fakeSigner struct {
+	name string
+}
+
+func (s fakeSigner) PublicKey() ssh.PublicKey {
+	return nil
+}
+
+func (s fakeSigner) Sign(io.Reader, []byte) (*ssh.Signature, error) {
+	return &ssh.Signature{}, nil
+}
+
+type fakeNetConn struct {
+	deadline time.Time
+}
+
+func (c *fakeNetConn) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c *fakeNetConn) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (c *fakeNetConn) Close() error {
+	return nil
+}
+
+func (c *fakeNetConn) LocalAddr() net.Addr {
+	return nil
+}
+
+func (c *fakeNetConn) RemoteAddr() net.Addr {
+	return nil
+}
+
+func (c *fakeNetConn) SetDeadline(t time.Time) error {
+	c.deadline = t
+	return nil
+}
+
+func (c *fakeNetConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (c *fakeNetConn) SetWriteDeadline(time.Time) error {
+	return nil
 }
