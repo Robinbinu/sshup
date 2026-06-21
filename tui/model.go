@@ -190,7 +190,7 @@ func formatRow(r checker.Result) string {
 			mem = "n/a"
 		}
 
-		if r.DiskPct > 0 {
+		if r.DiskPct >= 0 {
 			disk = fmt.Sprintf("%d%%", r.DiskPct)
 		} else {
 			disk = "n/a"

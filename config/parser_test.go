@@ -78,8 +78,8 @@ func TestParse_hostFields(t *testing.T) {
 	if got.Port != 2222 {
 		t.Errorf("Port = %d, want %d", got.Port, 2222)
 	}
-	if got.IdentityFile != "~/.ssh/id_ed25519" {
-		t.Errorf("IdentityFile = %q, want %q", got.IdentityFile, "~/.ssh/id_ed25519")
+	if len(got.IdentityFiles) != 1 || got.IdentityFiles[0] != "~/.ssh/id_ed25519" {
+		t.Errorf("IdentityFiles = %v, want [~/.ssh/id_ed25519]", got.IdentityFiles)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestParse_defaultsWhenOmitted(t *testing.T) {
 	if got.Port != 22 {
 		t.Errorf("Port = %d, want %d", got.Port, 22)
 	}
-	if got.IdentityFile != "" {
-		t.Errorf("IdentityFile = %q, want empty string", got.IdentityFile)
+	if len(got.IdentityFiles) != 0 {
+		t.Errorf("IdentityFiles = %v, want empty slice", got.IdentityFiles)
 	}
 }
 
@@ -241,6 +241,35 @@ Host app-1
 				t.Errorf("Port = %d, want %d", got.Port, 22)
 			}
 		})
+	}
+}
+
+func TestParse_multipleIdentityFiles(t *testing.T) {
+	path := writeTempConfig(t, `
+Host multi-key
+  HostName 10.0.0.2
+  User deploy
+  IdentityFile ~/.ssh/id_ed25519
+  IdentityFile ~/.ssh/id_rsa
+`)
+
+	hosts, err := config.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	}
+
+	got := hosts[0].IdentityFiles
+	if len(got) != 2 {
+		t.Fatalf("IdentityFiles = %v, want 2 entries", got)
+	}
+	if got[0] != "~/.ssh/id_ed25519" {
+		t.Errorf("IdentityFiles[0] = %q, want ~/.ssh/id_ed25519", got[0])
+	}
+	if got[1] != "~/.ssh/id_rsa" {
+		t.Errorf("IdentityFiles[1] = %q, want ~/.ssh/id_rsa", got[1])
 	}
 }
 
