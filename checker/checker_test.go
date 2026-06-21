@@ -36,7 +36,7 @@ func TestParseMetrics(t *testing.T) {
 		},
 		{
 			name:         "no free output macOS remote",
-			output:       " 10:00:00 up 10 days,  3:00,  2 users,  load average: 0.50, 0.40, 0.30\n\n30%\n",
+			output:       " 10:00:00 up 10 days,  3:00,  2 users,  load averages: 0.50, 0.40, 0.30\n\n30%\n",
 			wantUptime:   "10 days,  3:00",
 			wantLoad:     0.50,
 			wantMemUsed:  0,
