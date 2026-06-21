@@ -193,6 +193,37 @@ func TestCheckHostDeadlineStartsBeforeAuthSetup(t *testing.T) {
 	}
 }
 
+func TestCheckHostTimesOutDuringKnownHostsSetup(t *testing.T) {
+	originalKnownHosts := knownHostsCallbackFunc
+	originalAuthSetup := authSetupFunc
+	t.Cleanup(func() {
+		knownHostsCallbackFunc = originalKnownHosts
+		authSetupFunc = originalAuthSetup
+	})
+
+	knownHostsCallbackFunc = func(hostDeadline) (ssh.HostKeyCallback, error) {
+		time.Sleep(time.Hour)
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	authSetupFunc = func(config.Host, hostDeadline) (authSetupResult, error) {
+		return authSetupResult{methods: []ssh.AuthMethod{ssh.Password("unused")}}, nil
+	}
+
+	start := time.Now()
+	result := checkHost(config.Host{Alias: "known-hosts-slow", HostName: "127.0.0.1", Port: 1}, 10*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if result.Status != StatusDown {
+		t.Fatalf("Status = %s, want %s", result.Status, StatusDown)
+	}
+	if !strings.Contains(result.Err, "during known_hosts setup") {
+		t.Fatalf("Err = %q, want known_hosts setup timeout", result.Err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %s, want under 500ms", elapsed)
+	}
+}
+
 func TestAgentSignerProviderAppliesDeadlineToSigners(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
